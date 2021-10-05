@@ -5,7 +5,7 @@
 #include <linux/device.h>	//Device class stuff
 #include <linux/fs.h>		//File operation structures
 #include <linux/err.h>		//Error checking macros
-#include <linux/gpio.h>
+#include <linux/gpio/driver.h>
 
 #include <linux/ioctl.h>
 #include <linux/io.h>		//read and write from the memory
@@ -40,8 +40,6 @@ static long st_ioctl(struct file *filp, unsigned int cmd, unsigned long arg);
 #define PIN_UNASSN 0	//signifies pin available
 #define PIN_ARRAY_LEN 32
 
-static volatile uint32_t *gpio_map;
-
 //Global variables:
 struct gpiomod_data {
 	int mjr;
@@ -49,6 +47,8 @@ struct gpiomod_data {
 	spinlock_t lock;
 	uint32_t pins[PIN_ARRAY_LEN];
 };
+
+static void __iomem *regs;
 
 static struct gpiomod_data std = {
 	.mjr = 0,
@@ -146,7 +146,9 @@ static long st_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 			get_user (pin, (int __user *) arg);
 			printk(KERN_DEBUG "here 2 %d", pin);
 
-			val = readl(__io_address (GPIO_BASE + GPLEV0 + (pin/32)*4)); //move to next long if pin/32 ==1
+			// val = readl(__io_address (GPIO_BASE + GPLEV0 + (pin/32)*4)); //move to next long if pin/32 ==1
+			// val = ioread32((void *)(GPIO_BASE + GPLEV0)); // + (pin/32)*4));
+			val = ioread32((void *)(regs + GPLEV0)); // + (pin/32)*4));
 			printk(KERN_DEBUG "here 3");
 			// volatile unsigned int* loc = (GPIO_BASE + GPLEV0) + (pin / 32);
 			// flag = (1 << (pin % 32)) & *loc;
@@ -340,11 +342,22 @@ static int __init rpigpio_minit(void)
 	//init the spinlock
 	spin_lock_init(&(std.lock));
 
+	release_mem_region(GPIO_BASE, 0xb4);
+	if(!request_mem_region(GPIO_BASE, 0x40, MOD_NAME))
+	{
+		unregister_chrdev(std.mjr, MOD_NAME);
+		return -ENODEV;
+	}
+	regs = ioremap(GPIO_BASE, 0x40);
+	printk("%d", (int)regs);
+
 	return 0;
 }
 
 static void __exit rpigpio_mcleanup(void)
 {
+	iounmap(regs);
+	release_mem_region(GPIO_BASE, 0x40); 
 	device_destroy(std.cls, MKDEV(std.mjr, 0));
 	class_destroy(std.cls);
 	unregister_chrdev(std.mjr, MOD_NAME);
