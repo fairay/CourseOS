@@ -38,6 +38,9 @@
  *
  * \returns	 			0 unless an error occurs
  */
+
+#define RELAIS_PIN	17
+
 int main(int argc, char * argv[])
 {
 	int fd;
@@ -51,7 +54,7 @@ int main(int argc, char * argv[])
 
 	using_history();
 
-	fd = open("/dev/rpigpio", O_RDONLY);
+	fd = open("/dev/rpigpio", O_RDWR);
 	if(!fd) {
 		perror("open(O_RDONLY)");
 		return errno;
@@ -97,6 +100,7 @@ int main(int argc, char * argv[])
 			pin = atoi(found);
 			mydwstruct.pin = pin;
 			mydwstruct.data = v;
+			printf("Pin %d value=%d\n", pin, v);
 
 			ret = ioctl(fd, GPIO_WRITE, (unsigned long)&mydwstruct);
 			printf("%d\n", errno);

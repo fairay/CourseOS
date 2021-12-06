@@ -134,51 +134,39 @@ static long st_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
 	int pin;			//used in read, request, free
 	unsigned long ret;	//return value for copy to/from user
-	uint32_t val;
+	uint32_t val, new_val;
 	uint8_t flag;
 	struct gpio_data_write wdata;	//write data
 	struct gpio_data_mode  mdata;	//mode data
 	
 	printk(KERN_DEBUG "GPIO ioctl called");
 	switch (cmd) {
-		case GPIO_READ:
-			printk(KERN_DEBUG "here 1");
-			get_user (pin, (int __user *) arg);
-			printk(KERN_DEBUG "here 2 %d", pin);
 
-			// val = readl(__io_address (GPIO_BASE + GPLEV0 + (pin/32)*4)); //move to next long if pin/32 ==1
-			// val = ioread32((void *)(GPIO_BASE + GPLEV0)); // + (pin/32)*4));
+		case GPIO_READ:
+			get_user(pin, (int __user *) arg);
+
 			val = ioread32((void *)(regs + GPLEV0)); // + (pin/32)*4));
-			printk(KERN_DEBUG "here 3");
-			// volatile unsigned int* loc = (GPIO_BASE + GPLEV0) + (pin / 32);
-			// flag = (1 << (pin % 32)) & *loc;
 			flag = val >> (pin%32); 	//right shift by the remainder
 			flag &= 0x01;				//clear upper bits
 			printk(KERN_DEBUG "[READ] Pin: %d Val:%d\n", pin, flag);
 			put_user(flag, (uint8_t __user *)arg);
-
 			return 0;
+	
 		case GPIO_WRITE:
-			//Check permissions
 			ret = copy_from_user(&wdata, (struct gpio_data_write __user *)arg, sizeof(struct gpio_data_write));
 			if (ret != 0) {
 				printk(KERN_DEBUG "[WRITE] Error copying data from userspace\n");
 				return -EFAULT;
 			}
-			spin_lock(&std.lock);
-			if (std.pins[wdata.pin] != current->pid) { //make sure the process has it checked out
-				spin_unlock(&std.lock);
-				return -EACCES;	//Permission denied
-			}
-			spin_unlock(&std.lock);
-			printk(KERN_INFO "[WRITE] Pin: %d Val:%d\n", wdata.pin, wdata.data);
 
-			if (wdata.data == 1)
-				writel (1<<wdata.pin,	__io_address (GPIO_BASE + GPSET0));
+			printk(KERN_INFO "[WRITE] Pin: %d Val:%d\n", wdata.pin, wdata.data);
+			if (wdata.data)
+				iowrite32(1 << wdata.pin, (void *)(regs + GPSET0));
 			else
-				writel (1<<wdata.pin,	__io_address (GPIO_BASE + GPCLR0));
+				iowrite32(1 << wdata.pin, (void *)(regs + GPCLR0));
 
 			return 0;
+	
 		case GPIO_REQUEST:
 			get_user (pin, (int __user *) arg);
 			spin_lock(&std.lock);
@@ -290,7 +278,7 @@ static long st_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 //! Sets permissions correctly on created device special file
 static char *st_devnode(struct device *dev, umode_t *mode)
 {
-	if (mode) *mode = 0666;//adding a leading 0 makes number octal
+	if (mode) *mode = 0666; //adding a leading 0 makes number octal
 	return NULL;
 }
 //! initialize the driver.
@@ -318,7 +306,6 @@ static int __init rpigpio_minit(void)
 	std.cls = class_create(THIS_MODULE, "std.cls");
 	if (IS_ERR(std.cls)) {
 		printk(KERN_ALERT "[gpio] Cannot get class\n");
-		//Need to unregister
 		unregister_chrdev(std.mjr, MOD_NAME);
 		return PTR_ERR(std.cls);					//Gets errrno code so one can lookup the error
 	}
