@@ -26,19 +26,6 @@
 
 #include "modgpio.h"
 
- /*!
- * \brief Makes ioctl calls based on user input
- *
- * Users can enter any of the characters represented in the regex: /[RWCFTMQ]/i
- * Commands are in the format <ctrl char> <val1> <val2?>
- * val2 is not optional, but only used when writing or changing mode.
- *
- * \param[in]			argc		unused
- * \param[in]			argv		unused
- *
- * \returns	 			0 unless an error occurs
- */
-
 #define RELAIS_PIN	17
 
 int main(int argc, char * argv[])
@@ -48,7 +35,7 @@ int main(int argc, char * argv[])
 	int v=0;
 	int pin = 17;
 	char* buf = NULL;
-	char *found = NULL;
+	char* found = NULL;
 	struct gpio_data_write mydwstruct;
 	struct gpio_data_mode mydmstruct;
 
@@ -60,46 +47,54 @@ int main(int argc, char * argv[])
 		return errno;
 	}
 
-	printf("[R]ead [W]rite [C]heckout [F]ree [T]oggle [M]ode [Q]uit\n");
+	printf("Commands:\n");
+	printf("r <pin> - \t Reserve pin\n");
+	printf("f <pin> - \t Free pin\n");
+	printf("m <pin> <mode> - Set pin IO mode (0 - input, 1 - output)\n");
+	printf("\n");
+	printf("g <pin> - \t Get value from pin (r <pin>)\n");
+	printf("w <pin> <val> -  Write value to pin\n");
+	printf("t <pin> - \t Toggle pin value\n");
+	printf("\n");
+	printf("q  - \t\t Quit\n");
+	printf("\n");
 
 	while (1) {
 		if (buf != NULL)
 			free(buf);
-		// Get new item / delete item
-		buf = readline ("\e[01;34mCommand:\e[00m ");
-		if (buf == NULL) {
-			break;	//NULL on eof
+
+		buf = readline ("> ");
+		if (!buf) { 
+			break;
 		}
 		add_history(buf);
 
 		//accept commands without a space between ctrl char and value
-		if (buf[1] == ' ')
-			v=atoi(&buf[2]);
-		else
-			v=atoi(&buf[1]);
+		v=atoi(&buf[2]);
 
 		// Action based on input
-		if ((buf[0]=='r')||(buf[0]=='R')) {
+		switch (buf[0])
+		{
+		case 'g':
+		case 'G':
 			pin = v;
 			ret = ioctl(fd, GPIO_READ, &pin);
 			if (ret < 0) {
 				perror("ioctl");
 			}
 			printf("Pin %d value=%d\n", v, pin);
-		} else
-		if ((buf[0]=='w')||(buf[0]=='W')) {
+			break;
 
-			if (buf[1] == ' ')
-				found = strstr(&buf[3], " ");
-			else
-				found = strstr(&buf[2], " ");
+		case 'w':
+		case 'W':
+			found = strstr(&buf[3], " ");
 			if (found == NULL) {
-				printf("Missing 2nd parameter. Usage \"w <val> <pin>\"\n");
+				printf("Missing 2nd parameter. Usage \"w <pin> <val>\"\n");
 				continue;
 			}
-			pin = atoi(found);
-			mydwstruct.pin = pin;
-			mydwstruct.data = v;
+
+			mydwstruct.pin = v;
+			mydwstruct.data = atoi(found);
 			printf("Pin %d value=%d\n", pin, v);
 
 			ret = ioctl(fd, GPIO_WRITE, (unsigned long)&mydwstruct);
@@ -108,56 +103,65 @@ int main(int argc, char * argv[])
 				perror("ioctl");
 			else
 				printf("Wrote %d to pin %d\n",mydwstruct.data, mydwstruct.pin);
-		} else
-		if ((buf[0]=='c')||(buf[0]=='C')) {
+			break;
+
+		case 'r':
+		case 'R':
 			pin = v;
 			ret = ioctl(fd, GPIO_REQUEST, &pin);
 			if (ret < 0)
 				perror("ioctl");
 			else
 				printf("Reserved pin %d\n", pin);
-		} else
-		if ((buf[0]=='f')||(buf[0]=='F')) {
+			break;
+		
+		case 'f':
+		case 'F':
 			pin = v;
 			ret = ioctl(fd, GPIO_FREE, &pin);
 			if (ret < 0)
 				perror("ioctl");
 			else
 				printf("Freed pin %d\n", pin);
-		} else
-		if ((buf[0]=='t')||(buf[0]=='T')) {
+			break;
+		
+		case 't':
+		case 'T':
 			pin = v;
 			ret = ioctl(fd, GPIO_TOGGLE, &pin);
 			if (ret < 0)
 				perror("ioctl");
 			else
 				printf("Toggled pin %d to %d\n", v, pin);
-		} else
-		if ((buf[0]=='m')||(buf[0]=='M')) {
-			if (buf[1] == ' ')
-				found = strstr(&buf[3], " ");
-			else
-				found = strstr(&buf[2], " ");
+			break;
+		
+		case 'm':
+		case 'M':
+			found = strstr(&buf[3], " ");
 			if (found == NULL) {
 				printf("Missing 2nd parameter. Usage \"m <val> <pin>\"\n");
 				continue;
 			}
 
-			pin = atoi(found);
-
-			mydmstruct.pin = pin;
-			mydmstruct.data = v?MODE_OUTPUT:MODE_INPUT;
+			mydmstruct.pin = v;
+			mydmstruct.data = atoi(found)?MODE_OUTPUT:MODE_INPUT;
 
 			ret = ioctl(fd, GPIO_MODE, &mydmstruct);
 			if (ret < 0)
 				perror("ioctl");
 			else
 				printf("Set pin %d as %s \n", mydmstruct.pin, mydmstruct.data?"OUTPUT":"INPUT");
-		} else
+			break;
+		
+		case 'q':
+		case 'Q':
+			break;
+		default:
+			printf("Unknown Command \n");;
+		}
+
 		if ((buf[0]=='q')||(buf[0]=='Q')) {
 			break;
-		} else {
-			printf("Unknown Command \n");
 		}
 	}
 	clear_history();

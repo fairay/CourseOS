@@ -17,7 +17,6 @@ struct gpio_data_mode {
 
 
 #define BCM2708_PERI_BASE      	 0x3F000000 // 0x20000000 // 0x3F000000
-// #define GPIO_BASE                0x20000000 // 0x20200000UL //(BCM2708_PERI_BASE + 0x200000) /* GPIO */
 #define GPIO_BASE                (BCM2708_PERI_BASE + 0x200000) /* GPIO */
 //in: pin to read	//out: value 			//the value read on the pin
 #define GPIO_READ			_IOWR(GPIO_IOC_MAGIC, 0x90, int)
