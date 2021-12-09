@@ -29,28 +29,21 @@ struct gpio_data_mode {
 #define RELAIS_PIN	17
 #define BUTTON_PIN	22
 
-/// DEFINES OF io
+/// DEFINES OF ioctl
 //in: pin to read	//out: value 			//the value read on the pin
 #define GPIO_READ			_IOWR(GPIO_IOC_MAGIC, 0x90, int)
-
 //in: struct(pin, data)		//out: NONE
 #define GPIO_WRITE			_IOW(GPIO_IOC_MAGIC, 0x91, struct gpio_data_write)
-
 //in: pin to request			//out: success/fail 	// request exclusive modify privileges
 #define GPIO_REQUEST		_IOW(GPIO_IOC_MAGIC, 0x92, int)
-
 //in: pin to free
 #define GPIO_FREE			_IOW(GPIO_IOC_MAGIC, 0x93, int)
-
 //in: pin to toggle			//out: new value
 #define GPIO_TOGGLE			_IOWR(GPIO_IOC_MAGIC, 0x94, int)
-
 //in: struct (pin, mode[i/o])
 #define GPIO_MODE			_IOW(GPIO_IOC_MAGIC, 0x95, struct gpio_data_mode)
-
 //in: pin to set //set the pin (same as write 1)
 #define GPIO_SET			_IOW(GPIO_IOC_MAGIC, 0x96, int)
-
 //in: pin to clear //clear the pin (same as write 0)
 #define GPIO_CLR			_IOW(GPIO_IOC_MAGIC, 0x97, int)
 

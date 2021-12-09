@@ -53,6 +53,8 @@ int main(int argc, char * argv[])
 	printf("g <pin> - \t Get value from pin (r <pin>)\n");
 	printf("w <pin> <val> -  Write value to pin\n");
 	printf("t <pin> - \t Toggle pin value\n");
+	printf("s <pin> - \t Set pin value\n");
+	printf("c <pin> - \t Toggle pin value\n");
 	printf("\n");
 	printf("q  - \t\t Quit\n");
 	printf("\n");
@@ -82,6 +84,26 @@ int main(int argc, char * argv[])
 			}
 			printf("Pin %d value=%d\n", v, pin);
 			break;
+		
+		case 's':
+		case 'S':
+			pin = v;
+			ret = ioctl(fd, GPIO_SET, &pin);
+			if (ret < 0)
+				perror("ioctl");
+			else
+				printf("Set pin %d\n", pin);
+			break;
+		
+		case 'c':
+		case 'C':
+			pin = v;
+			ret = ioctl(fd, GPIO_CLR, &pin);
+			if (ret < 0)
+				perror("ioctl");
+			else
+				printf("Clear pin %d\n", pin);
+			break;
 
 		case 'w':
 		case 'W':
@@ -96,8 +118,8 @@ int main(int argc, char * argv[])
 			printf("Pin %d value=%d\n", pin, v);
 
 			ret = ioctl(fd, GPIO_WRITE, (unsigned long)&mydwstruct);
-			printf("%d\n", errno);
-			if (ret < 0)
+			
+			if (ret < 0) 
 				perror("ioctl");
 			else
 				printf("Wrote %d to pin %d\n",mydwstruct.data, mydwstruct.pin);

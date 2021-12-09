@@ -14,7 +14,7 @@
 
 #include "modgpio.h"
 
-#define IO_OFFSET			 	0x0// 0xfd000000 // 0xfec00000 // 
+#define IO_OFFSET			 	0x00
 #define __IO_ADDRESS(x)			((x) + IO_OFFSET)
 #define IO_ADDRESS(pa)			IOMEM(__IO_ADDRESS(pa))
 #define __io_address(n)		((void __iomem *)IO_ADDRESS(n))
@@ -99,13 +99,105 @@ static int st_release(struct inode *inode, struct file *filp)
 	return 0;
 }
 
+/// READ/WRITE FUNCTIONS
+static uint8_t rpigpio_read(int pin) 
+{
+	uint32_t val;
+	uint8_t flag;
+	
+	val = readl(__io_address(std.regs + GPLEV0));
+	flag = val >> pin;
+	flag &= 0x01;
+	printk(KERN_DEBUG "[READ] Pin: %d Val:%d\n", pin, flag);
+
+	return flag;
+}
+
+static long rpigpio_write(int pin, uint8_t val) 
+{
+	spin_lock(&std.lock);
+	if (pin > PIN_ARRAY_LEN || pin < 0 || std.pins[pin] == PIN_NULL_PID) {	// validate pins
+		spin_unlock(&std.lock);
+		return -EFAULT;	// bad request
+	} else if (std.pins[pin] != current->pid) {
+		spin_unlock(&std.lock);
+		return -EACCES;	// pin reserved by another process
+	}
+	spin_unlock(&std.lock);
+
+	printk(KERN_INFO "[WRITE] Pin: %d Val:%d\n", pin, val);
+	if (val)
+		writel(1 << pin, __io_address(std.regs + GPSET0)); // set
+	else
+		writel(1 << pin, __io_address(std.regs + GPCLR0)); // clear
+	
+	return 0;
+}
 
 static long rpigpio_toggle(int pin, uint8_t *flag)
 {
-	uint32_t val;
+	spin_lock(&std.lock);
+	if (pin > PIN_ARRAY_LEN || pin < 0 || std.pins[pin] == PIN_NULL_PID) { // validate pins
+		spin_unlock(&std.lock);
+		return -EFAULT;	// bad request
+	} else if (std.pins[pin] != current->pid) {
+		spin_unlock(&std.lock);
+		return -EACCES;	// permission denied
+	}
+	spin_unlock(&std.lock);
 
+	*flag = rpigpio_read(pin);
+	if (*flag)
+		writel(1 << pin, __io_address(std.regs + GPCLR0));	// clear
+	else
+		writel(1 << pin, __io_address(std.regs + GPSET0));	// set
+	printk(KERN_DEBUG "[TOGGLE] Pin:%d %.1d -> %.1d\n", pin, *flag, *flag?0:1);
+	return 0;
+}
+
+/// OWN PIN FUNCTIONS
+static long rpigpio_request(int pin, int pid) 
+{
 	spin_lock(&std.lock);
 	// validate pins
+	if (pin > PIN_ARRAY_LEN || pin < 0 || std.pins[pin] == PIN_NULL_PID) {
+		spin_unlock(&std.lock);
+		return -EFAULT;	// bad request
+	} else if (std.pins[pin] != PIN_UNASSN) {
+		spin_unlock(&std.lock);
+		return -EBUSY;	// pin already reserved
+	}
+
+	std.pins[pin] = pid;
+	spin_unlock(&std.lock);
+
+	printk(KERN_DEBUG "[REQUEST] Pin:%d Assigned To:%d\n", pin, pid);
+	return 0;
+}
+
+static long rpigpio_free(int pin) 
+{
+	spin_lock(&std.lock);
+	//validate pins
+	if (pin > PIN_ARRAY_LEN || pin < 0 || std.pins[pin] == PIN_NULL_PID) {
+		spin_unlock(&std.lock);
+		return -EFAULT;	// bad request
+	} else if (std.pins[pin] != current->pid) {
+		spin_unlock(&std.lock);
+		return -EACCES;	// pin reserved by another process
+	}
+	std.pins[pin] = PIN_UNASSN;
+	spin_unlock(&std.lock);
+
+	printk(KERN_DEBUG "[FREE] Pin:%d From:%d\n", pin, current->pid);
+	return 0;
+}
+
+/// MODE FUNCTIONS
+static long rpigpio_mode(int pin, PIN_MODE_t mode)
+{
+	spin_lock(&std.lock);
+	// validate pin
 	if (pin > PIN_ARRAY_LEN || pin < 0 || std.pins[pin] == PIN_NULL_PID) { 
 		spin_unlock(&std.lock);
 		return -EFAULT;	// bad request
@@ -115,23 +207,34 @@ static long rpigpio_toggle(int pin, uint8_t *flag)
 	}
 	spin_unlock(&std.lock);
 
-	val = readl(__io_address(std.regs + GPLEV0));
-	*flag = val >> (pin%32);
-	*flag &= 0x01;
+	// clear the bits (sets to input)
+	writel(~(7<<((pin %10)*3)) & readl(__io_address(std.regs + GPFSEL0 + (0x04)*(pin /10))),
+			__io_address(std.regs + GPFSEL0 + (0x04)*(pin/10)));
+	
+	switch (mode)
+	{
+	case MODE_INPUT:
+		printk(KERN_DEBUG "[MODE] Pin %d set as Input\n", pin);
+		break;
+	
+	case MODE_OUTPUT:
+		writel(1<<((pin % 10)*3) | readl(__io_address(std.regs + GPFSEL0 + (0x04)*(pin/10))), 
+			__io_address(std.regs + GPFSEL0 + (0x04)*(pin/10)));    // Set pin as output
+		printk(KERN_DEBUG "[MODE] Pin %d set as Output\n", pin);
+		break;
 
-	printk(KERN_DEBUG "[TOGGLE] Pin:%d From:%.1d To:%.1d\n", pin, *flag, *flag?0:1);
-	if (*flag)
-		writel(1 << pin, __io_address(std.regs + GPCLR0));	// clear
-	else
-		writel(1 << pin, __io_address(std.regs + GPSET0));	// set
+	default:
+		return -EINVAL;
+	}
+
 	return 0;
 }
+
 
 static long st_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
 	int pin;			//used in read, request, free
 	unsigned long ret, code;
-	uint32_t val;
 	uint8_t flag;
 	struct gpio_data_write wdata;	// write data
 	struct gpio_data_mode  mdata;	// mode data
@@ -139,12 +242,7 @@ static long st_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 	switch (cmd) {
 		case GPIO_READ:
 			get_user(pin, (int __user *) arg);
-
-			val = readl(__io_address(std.regs + GPLEV0));
-			flag = val >> (pin%32);
-			flag &= 0x01;
-			printk(KERN_DEBUG "[READ] Pin: %d Val:%d\n", pin, flag);
-
+			flag = rpigpio_read(pin);
 			put_user(flag, (uint8_t __user *)arg);
 			return 0;
 	
@@ -154,70 +252,21 @@ static long st_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 				printk(KERN_DEBUG "[WRITE] Error copying data from userspace\n");
 				return -EFAULT;
 			}
-
-			pin = wdata.pin;
-			spin_lock(&std.lock);
-			//validate pins
-			if (pin > PIN_ARRAY_LEN || pin < 0 || std.pins[pin] == PIN_NULL_PID) {
-				spin_unlock(&std.lock);
-				return -EFAULT;	// bad request
-			} else if (std.pins[pin] != current->pid) {
-				spin_unlock(&std.lock);
-				return -EACCES;	// pin reserved by another process
-			}
-			spin_unlock(&std.lock);
-
-			printk(KERN_INFO "[WRITE] Pin: %d Val:%d\n", wdata.pin, wdata.data);
-			if (wdata.data)
-				writel(1 << wdata.pin, __io_address(std.regs + GPSET0)); // set
-			else
-				writel(1 << wdata.pin, __io_address(std.regs + GPCLR0)); // clear
-
-			return 0;
+			return rpigpio_write(wdata.pin, wdata.data);
 	
 		case GPIO_REQUEST:
 			get_user (pin, (int __user *) arg);
-
-			spin_lock(&std.lock);
-			// validate pins
-			if (pin > PIN_ARRAY_LEN || pin < 0 || std.pins[pin] == PIN_NULL_PID) {
-				spin_unlock(&std.lock);
-				return -EFAULT;	// bad request
-			} else if (std.pins[pin] != PIN_UNASSN) {
-				spin_unlock(&std.lock);
-				return -EBUSY;	// pin already reserved
-			}
-			std.pins[pin] = current->pid;
-			spin_unlock(&std.lock);
-
-			printk(KERN_DEBUG "[REQUEST] Pin:%d Assn To:%d\n", pin, current->pid);
-			return 0;
-
+			return rpigpio_request(pin, current->pid);
 
 		case GPIO_FREE:
 			get_user (pin, (int __user *) arg);
-
-			spin_lock(&std.lock);
-			//validate pins
-			if (pin > PIN_ARRAY_LEN || pin < 0 || std.pins[pin] == PIN_NULL_PID) {
-				spin_unlock(&std.lock);
-				return -EFAULT;	// bad request
-			} else if (std.pins[pin] != current->pid) {
-				spin_unlock(&std.lock);
-				return -EACCES;	// pin reserved by another process
-			}
-			std.pins[pin] = PIN_UNASSN;
-			spin_unlock(&std.lock);
-			printk(KERN_DEBUG "[FREE] Pin:%d From:%d\n", pin, current->pid);
-			return 0;
+			return code = rpigpio_free(pin);
 
 		case GPIO_TOGGLE:
 			get_user (pin, (int __user *) arg);
 
-			code = rpigpio_toggle(pin, &flag);
-			if (!code)
+			if (!(code = rpigpio_toggle(pin, &flag)))
 				put_user(flag?0:1, (uint8_t __user *)arg);
-
 			return code;
 
 		case GPIO_MODE:
@@ -227,57 +276,19 @@ static long st_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 				return -EFAULT;
 			}
 
-			spin_lock(&std.lock);
-			// validate pin
-			if (mdata.pin > PIN_ARRAY_LEN || mdata.pin < 0 || std.pins[mdata.pin] == PIN_NULL_PID) { 
-				spin_unlock(&std.lock);
-				return -EFAULT;	// bad request
-			} else if (std.pins[mdata.pin] != current->pid) {
-				spin_unlock(&std.lock);
-				return -EACCES;	// permission denied
-			}
-			spin_unlock(&std.lock);
+			return rpigpio_mode(mdata.pin, mdata.data);
 
-			//clear the bits (sets to input)
-			writel(~(7<<((mdata.pin %10)*3)) & readl(__io_address(std.regs + GPFSEL0 + (0x04)*(mdata.pin /10))), __io_address(std.regs + GPFSEL0 + (0x04)*(mdata.pin/10)));
-			if(mdata.data == MODE_INPUT) {
-				printk(KERN_DEBUG "[MODE] Pin %d set as Input\n", mdata.pin);
-			} else if (mdata.data == MODE_OUTPUT) {
-				writel(1<<((mdata.pin % 10)*3) | readl(__io_address(std.regs + GPFSEL0 + (0x04)*(mdata.pin/10))), __io_address(std.regs + GPFSEL0 + (0x04)*(mdata.pin/10)));    // Set pin as output
-				printk(KERN_DEBUG "[MODE] Pin %d set as Output\n", mdata.pin);
-			} else {
-				return -EINVAL;	//Invalid argument
-			}
-			return 0;
 		case GPIO_SET:
+			get_user (pin, (int __user *) arg);
+			printk(KERN_INFO "[SET] Pin: %d\n", pin);
+			return rpigpio_write(pin, 1);
 		case GPIO_CLR:
 			get_user (pin, (int __user *) arg);
+			printk(KERN_INFO "[CLR] Pin: %d\n", pin);
+			return rpigpio_write(pin, 0);
 			
-			spin_lock(&std.lock);
-			// validate pins
-			if (pin > PIN_ARRAY_LEN || pin < 0 || std.pins[pin] == PIN_NULL_PID) 
-			{ 
-				spin_unlock(&std.lock);
-				return -EFAULT;	// bad request
-			} 
-			else if (std.pins[pin] != current->pid) 
-			{
-				spin_unlock(&std.lock);
-				return -EACCES;	// permission denied
-			}
-			spin_unlock(&std.lock);
-
-			if (cmd == GPIO_SET) {
-				writel(1 << pin, __io_address(std.regs + GPSET0));	// set
-				printk(KERN_INFO "[SET] Pin: %d\n", pin);
-			} else {
-				writel(1 << pin, __io_address(std.regs + GPCLR0));	// clear
-				printk(KERN_INFO "[CLR] Pin: %d\n", pin);
-			}
-
-			return 0;
 		default:
-			return -ENOTTY;	//Error Message: inappropriate IOCTL for device
+			return -ENOTTY;
 	}
 }
 
@@ -344,7 +355,9 @@ static int __init rpigpio_minit(void)
 	printk(KERN_INFO "[GRIO] %s loaded\n", MOD_NAME);
 
 	std.irq = gpio_to_irq(BUTTON_PIN);
-	if (request_irq(std.irq, button_int, IRQF_TRIGGER_RISING, "button_int", &std.mjr))
+	if (!rpigpio_mode(BUTTON_PIN, MODE_INPUT) ||
+		!rpigpio_mode(RELAIS_PIN, MODE_OUTPUT) ||
+		request_irq(std.irq, button_int, IRQF_TRIGGER_RISING, "button_int", &std.mjr))
 	{
 		unregister_chrdev(std.mjr, MOD_NAME);
 		return -1;
