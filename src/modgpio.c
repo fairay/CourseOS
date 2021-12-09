@@ -1,20 +1,21 @@
-#include <linux/module.h>	//module stuff
-#include <linux/kernel.h>	//printk
-#include <linux/init.h>		//__init
-#include <linux/stat.h>		//permissions
-#include <linux/device.h>	//Device class stuff
-#include <linux/fs.h>		//File operation structures
-#include <linux/err.h>		//Error checking macros
-#include <linux/gpio/driver.h>
+#include <linux/module.h>	
+#include <linux/kernel.h>	
+#include <linux/init.h>		
+#include <linux/stat.h>		
+#include <linux/device.h>	
+#include <linux/fs.h>		
+#include <linux/err.h>		
+#include <linux/semaphore.h>
+// #include <linux/gpio/driver.h>
 
 #include <linux/ioctl.h>
-#include <linux/io.h>		//read and write from the memory
-#include <asm/uaccess.h>	//translation from userspace ptr to kernelspace
+#include <linux/io.h>	
+// #include <asm/uaccess.h>
 // #include <mach/platform.h>	//pull address of system timer
 
-#include <asm/io.h>
+// #include <asm/io.h>
 
-#include <linux/types.h>	//uintxx_t
+// #include <linux/types.h>	//uintxx_t
 
 #include <linux/sched.h>	//for current->pid
 
@@ -31,9 +32,9 @@
 #define RPIGPIO_MOD_SDEV "RPiGPIO" 	
 #define MOD_NAME "rpigpio" 	
 
-static int st_open(struct inode *inode, struct file *filp);
-static int st_release(struct inode *inode, struct file *filp);
-static long st_ioctl(struct file *filp, unsigned int cmd, unsigned long arg);
+// static int st_open(struct inode *inode, struct file *filp);
+// static int st_release(struct inode *inode, struct file *filp);
+// static long st_ioctl(struct file *filp, unsigned int cmd, unsigned long arg);
 
 
 #define PIN_NULL_PID		1	// invalid pin
@@ -51,10 +52,9 @@ struct gpiomod_data {
 static void __iomem *regs;
 
 static struct gpiomod_data std = {
-	.mjr = 0,
-	.cls = NULL,
-	//.lock= NULL
-	.pins = {			//note this is for rpiv2
+	.mjr = 0, 
+	.cls = NULL, 
+	.pins = {			
 		PIN_NULL_PID,
 		PIN_NULL_PID,
 		PIN_UNASSN,	//pin 2
@@ -90,19 +90,8 @@ static struct gpiomod_data std = {
 	}
 };
 
-//Device special files have two numbers associated with them
-// -major index into array
-static const struct file_operations gpio_fops = {
-	.owner			= THIS_MODULE,
-	.open			= st_open,
-	.release 		= st_release,
-	.unlocked_ioctl = st_ioctl,
-};
 
 
-
-//! handles user opening device special file
-//Open and release are called each time
 static int st_open(struct inode*inode, struct file *filp)
 {
 	return 0;
@@ -305,36 +294,44 @@ static long st_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 
 static char *st_devnode(struct device *dev, umode_t *mode)
 {
-	if (mode) *mode = 0666; //adding a leading 0 makes number octal
+	if (mode) *mode = 0666;
 	return NULL;
 }
 
+
+static const struct file_operations gpio_fops = {
+	.owner			= THIS_MODULE,
+	.open			= st_open,
+	.release 		= st_release,
+	.unlocked_ioctl = st_ioctl,
+};
 
 static int __init rpigpio_minit(void)
 {
 	struct device *dev;
 
 	printk(KERN_INFO "[GRIO] Startup\n");
-	//register char device
-	std.mjr = register_chrdev(0, MOD_NAME, &gpio_fops);//character device
+	// init spinlock
+	spin_lock_init(&(std.lock));
+
+	// register char device
+	std.mjr = register_chrdev(0, MOD_NAME, &gpio_fops);
 	if (std.mjr < 0) {
 		printk(KERN_ALERT "[GRIO] Cannot Register");
 		return std.mjr;
 	}
 	printk(KERN_INFO "[GRIO] Major #%d\n", std.mjr);
-
+	
+	// create class
 	std.cls = class_create(THIS_MODULE, "std.cls");
 	if (IS_ERR(std.cls)) {
 		printk(KERN_ALERT "[GRIO] Cannot get class\n");
 		unregister_chrdev(std.mjr, MOD_NAME);
-		return PTR_ERR(std.cls);					//Gets errrno code so one can lookup the error
+		return PTR_ERR(std.cls);
 	}
-
-	//store a pointer to the st_devnode function
-	//-its a callback when the device special file is actually being created
 	std.cls->devnode = st_devnode;
 
-	//Create Device													name of dev/spec.file
+	// create device (dev/spec.file)
 	dev = device_create(std.cls, NULL, MKDEV(std.mjr, 0), (void*)&std, MOD_NAME);
 	if (IS_ERR(dev)) {
 		printk(KERN_ALERT "[GRIO] Cannot create device\n");
@@ -342,20 +339,21 @@ static int __init rpigpio_minit(void)
 		unregister_chrdev(std.mjr, MOD_NAME);
 		return PTR_ERR(dev);
 	}
-	printk(KERN_INFO "[GRIO] %s Loaded\n", MOD_NAME);
 
-	//init the spinlock
-	spin_lock_init(&(std.lock));
-
+	// trying to release memory region
 	release_mem_region(GPIO_BASE, 0xb4);
+
+	// request GPIO memory region
 	if(!request_mem_region(GPIO_BASE, 0x40, MOD_NAME))
 	{
 		unregister_chrdev(std.mjr, MOD_NAME);
 		return -ENODEV;
 	}
-	regs = ioremap(GPIO_BASE, 0x40);
-	printk("%d", (int)regs);
 
+	// create mapping of GPIO IO memory
+	regs = ioremap(GPIO_BASE, 0x40);
+
+	printk(KERN_INFO "[GRIO] %s loaded\n", MOD_NAME);
 	return 0;
 }
 
@@ -367,7 +365,7 @@ static void __exit rpigpio_mcleanup(void)
 	class_destroy(std.cls);
 	unregister_chrdev(std.mjr, MOD_NAME);
 
-	printk(KERN_NOTICE "[GRIO] Goodbye\n");
+	printk(KERN_NOTICE "[GRIO] %s removed\n", MOD_NAME);
 }
 
 module_init(rpigpio_minit);
