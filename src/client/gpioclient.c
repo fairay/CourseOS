@@ -26,8 +26,6 @@
 
 #include "modgpio.h"
 
-#define RELAIS_PIN	17
-
 int main(int argc, char * argv[])
 {
 	int fd;

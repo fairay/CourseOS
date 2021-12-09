@@ -16,8 +16,20 @@ struct gpio_data_mode {
 };
 
 
-#define BCM2708_PERI_BASE      	 0x3F000000 // 0x20000000 // 0x3F000000
-#define GPIO_BASE                (BCM2708_PERI_BASE + 0x200000) /* GPIO */
+/// GPIO MEMORY
+#define BCM2708_PERI_BASE      	 0x3F000000
+#define GPIO_BASE                (BCM2708_PERI_BASE + 0x200000) 
+// memory locations defines
+#define GPFSEL0		0x00
+#define GPSET0 		0x1C
+#define GPCLR0 		0x28
+#define GPLEV0 		0x34
+
+/// PIN ROLES
+#define RELAIS_PIN	17
+#define BUTTON_PIN	22
+
+/// DEFINES OF io
 //in: pin to read	//out: value 			//the value read on the pin
 #define GPIO_READ			_IOWR(GPIO_IOC_MAGIC, 0x90, int)
 

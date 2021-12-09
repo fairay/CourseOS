@@ -6,18 +6,11 @@
 #include <linux/fs.h>		
 #include <linux/err.h>		
 #include <linux/semaphore.h>
-// #include <linux/gpio/driver.h>
-
+#include <linux/gpio.h>
+#include <linux/interrupt.h>
 #include <linux/ioctl.h>
 #include <linux/io.h>	
-// #include <asm/uaccess.h>
-// #include <mach/platform.h>	//pull address of system timer
-
-// #include <asm/io.h>
-
-// #include <linux/types.h>	//uintxx_t
-
-#include <linux/sched.h>	//for current->pid
+#include <linux/sched.h>
 
 #include "modgpio.h"
 
@@ -27,17 +20,17 @@
 #define __io_address(n)		((void __iomem *)IO_ADDRESS(n))
 
 
-#define RPIGPIO_MOD_AUTH "Ivanov Vsedolod"
-#define RPIGPIO_MOD_DESC "OS cource work (GPIO access control for Raspberry Pi)"
-#define RPIGPIO_MOD_SDEV "RPiGPIO" 	
-#define MOD_NAME "rpigpio" 	
+#define RPIGPIO_MOD_AUTH 	"Ivanov Vsedolod"
+#define RPIGPIO_MOD_DESC 	"OS cource work (GPIO access control for Raspberry Pi)"
+#define RPIGPIO_MOD_SDEV 	"RPiGPIO" 	
+#define MOD_NAME 			"rpigpio" 	
 
 #define PIN_NULL_PID		1	// invalid pin
 #define PIN_UNASSN 			0	// pin available
 #define PIN_ARRAY_LEN 		32
 
-
 struct gpiomod_data {
+	int irq;
 	int mjr;
 	struct class *cls;
 	void __iomem *regs;
@@ -52,39 +45,38 @@ static struct gpiomod_data std = {
 	.pins = {			
 		PIN_NULL_PID,
 		PIN_NULL_PID,
-		PIN_UNASSN,	//pin 2
-		PIN_UNASSN,	//pin 3
-		PIN_UNASSN,	//pin 4
+		PIN_UNASSN,
+		PIN_UNASSN,
+		PIN_UNASSN,
 		PIN_NULL_PID,
 		PIN_NULL_PID,
-		PIN_UNASSN,	//pin 7
-		PIN_UNASSN,	//pin 8
-		PIN_UNASSN,	//pin 9
-		PIN_UNASSN,	//pin 10
-		PIN_UNASSN,	//pin 11
+		PIN_UNASSN,
+		PIN_UNASSN,
+		PIN_UNASSN,
+		PIN_UNASSN,
+		PIN_UNASSN,
 		PIN_NULL_PID,
 		PIN_NULL_PID,
-		PIN_UNASSN,	//pin 14
-		PIN_UNASSN,	//pin 15
+		PIN_UNASSN,
+		PIN_UNASSN,
 		PIN_NULL_PID,
-		PIN_UNASSN,	//pin 17
-		PIN_UNASSN,	//pin 18
+		PIN_UNASSN,
+		PIN_UNASSN,
 		PIN_NULL_PID,
 		PIN_NULL_PID,
 		PIN_NULL_PID,
-		PIN_UNASSN,	//pin 22
-		PIN_UNASSN,	//pin 23
-		PIN_UNASSN,	//pin 24
-		PIN_UNASSN,	//pin 25
+		PIN_UNASSN,
+		PIN_UNASSN,
+		PIN_UNASSN,
+		PIN_UNASSN,
 		PIN_NULL_PID,
-		PIN_UNASSN,	//pin 27
-		PIN_UNASSN,	//pin 28
-		PIN_UNASSN,	//pin 29
-		PIN_UNASSN,	//pin 30
-		PIN_UNASSN,	//pin 31
+		PIN_UNASSN,
+		PIN_UNASSN,
+		PIN_UNASSN,
+		PIN_UNASSN,
+		PIN_UNASSN,
 	}
 };
-
 
 
 static int st_open(struct inode*inode, struct file *filp)
@@ -92,13 +84,12 @@ static int st_open(struct inode*inode, struct file *filp)
 	return 0;
 }
 
-//! handles user closing the device special file
 static int st_release(struct inode *inode, struct file *filp)
 {
 	int i;
-	//check to see if the releasing process has any pins checked out, and free them
+
 	spin_lock(&std.lock);
-	for (i=0; i<PIN_ARRAY_LEN; i++) {
+	for (i = 0; i < PIN_ARRAY_LEN; i++) {
 		if (std.pins[i] == current->pid) {
 			printk(KERN_DEBUG "[FREE] Pin:%d From:%d\n", i, current->pid);
 			std.pins[i] = PIN_UNASSN;
@@ -108,17 +99,38 @@ static int st_release(struct inode *inode, struct file *filp)
 	return 0;
 }
 
-// memory location defines
-#define GPFSEL0		0x00
-#define GPSET0 		0x1C
-#define GPCLR0 		0x28
-#define GPLEV0 		0x34
 
-// processes incomming IOCTL calls
+static long rpigpio_toggle(int pin, uint8_t *flag)
+{
+	uint32_t val;
+
+	spin_lock(&std.lock);
+	// validate pins
+	if (pin > PIN_ARRAY_LEN || pin < 0 || std.pins[pin] == PIN_NULL_PID) { 
+		spin_unlock(&std.lock);
+		return -EFAULT;	// bad request
+	} else if (std.pins[pin] != current->pid) {
+		spin_unlock(&std.lock);
+		return -EACCES;	// permission denied
+	}
+	spin_unlock(&std.lock);
+
+	val = readl(__io_address(std.regs + GPLEV0));
+	*flag = val >> (pin%32);
+	*flag &= 0x01;
+
+	printk(KERN_DEBUG "[TOGGLE] Pin:%d From:%.1d To:%.1d\n", pin, *flag, *flag?0:1);
+	if (*flag)
+		writel(1 << pin, __io_address(std.regs + GPCLR0));	// clear
+	else
+		writel(1 << pin, __io_address(std.regs + GPSET0));	// set
+	return 0;
+}
+
 static long st_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
 	int pin;			//used in read, request, free
-	unsigned long ret;	//return value for copy to/from user
+	unsigned long ret, code;
 	uint32_t val;
 	uint8_t flag;
 	struct gpio_data_write wdata;	// write data
@@ -202,29 +214,11 @@ static long st_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		case GPIO_TOGGLE:
 			get_user (pin, (int __user *) arg);
 
-			spin_lock(&std.lock);
-			// validate pins
-			if (pin > PIN_ARRAY_LEN || pin < 0 || std.pins[pin] == PIN_NULL_PID) { 
-				spin_unlock(&std.lock);
-				return -EFAULT;	// bad request
-			} else if (std.pins[pin] != current->pid) {
-				spin_unlock(&std.lock);
-				return -EACCES;	// permission denied
-			}
-			spin_unlock(&std.lock);
+			code = rpigpio_toggle(pin, &flag);
+			if (!code)
+				put_user(flag?0:1, (uint8_t __user *)arg);
 
-			val = readl(__io_address(std.regs + GPLEV0));
-			flag = val >> (pin%32);
-			flag &= 0x01;
-
-			printk(KERN_DEBUG "[TOGGLE] Pin:%d From:%.1d To:%.1d\n", pin, flag, flag?0:1);
-			if (flag)
-				writel(1 << pin, __io_address(std.regs + GPCLR0));	// clear
-			else
-				writel(1 << pin, __io_address(std.regs + GPSET0));	// set
-
-			put_user(flag?0:1, (uint8_t __user *)arg);
-			return 0;
+			return code;
 
 		case GPIO_MODE:
 			ret = copy_from_user(&mdata, (struct gpio_data_mode __user *)arg, sizeof(struct gpio_data_mode));
@@ -301,15 +295,21 @@ static const struct file_operations gpio_fops = {
 	.unlocked_ioctl = st_ioctl,
 };
 
+static irqreturn_t button_int (int irq, void *dev_id)
+{
+	uint8_t flag;
+	printk(KERN_DEBUG "[IRQ] %d\n", irq);
+	rpigpio_toggle(RELAIS_PIN, &flag);
+	return IRQ_HANDLED;
+}
+
 static int __init rpigpio_minit(void)
 {
 	struct device *dev;
 
 	printk(KERN_INFO "[GRIO] Startup\n");
-	// init spinlock
 	spin_lock_init(&(std.lock));
 
-	// register char device
 	std.mjr = register_chrdev(0, MOD_NAME, &gpio_fops);
 	if (std.mjr < 0) {
 		printk(KERN_ALERT "[GRIO] Cannot Register");
@@ -317,7 +317,6 @@ static int __init rpigpio_minit(void)
 	}
 	printk(KERN_INFO "[GRIO] Major #%d\n", std.mjr);
 	
-	// create class
 	std.cls = class_create(THIS_MODULE, "std.cls");
 	if (IS_ERR(std.cls)) {
 		printk(KERN_ALERT "[GRIO] Cannot get class\n");
@@ -326,7 +325,6 @@ static int __init rpigpio_minit(void)
 	}
 	std.cls->devnode = st_devnode;
 
-	// create device (dev/spec.file)
 	dev = device_create(std.cls, NULL, MKDEV(std.mjr, 0), (void*)&std, MOD_NAME);
 	if (IS_ERR(dev)) {
 		printk(KERN_ALERT "[GRIO] Cannot create device\n");
@@ -335,25 +333,31 @@ static int __init rpigpio_minit(void)
 		return PTR_ERR(dev);
 	}
 
-	// trying to release memory region
 	release_mem_region(GPIO_BASE, 0xb4);
-
-	// request GPIO memory region
 	if(!request_mem_region(GPIO_BASE, 0x40, MOD_NAME))
 	{
 		unregister_chrdev(std.mjr, MOD_NAME);
 		return -ENODEV;
 	}
-
-	// create mapping of GPIO IO memory
 	std.regs = ioremap(GPIO_BASE, 0x40);
 
 	printk(KERN_INFO "[GRIO] %s loaded\n", MOD_NAME);
+
+	std.irq = gpio_to_irq(BUTTON_PIN);
+	if (request_irq(std.irq, button_int, IRQF_TRIGGER_RISING, "button_int", &std.mjr))
+	{
+		unregister_chrdev(std.mjr, MOD_NAME);
+		return -1;
+	}
+
 	return 0;
 }
 
 static void __exit rpigpio_mcleanup(void)
 {
+	synchronize_irq(std.irq);
+	free_irq(std.irq, &std.mjr);
+
 	iounmap(std.regs);
 	release_mem_region(GPIO_BASE, 0x40); 
 	device_destroy(std.cls, MKDEV(std.mjr, 0));
