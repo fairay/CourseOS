@@ -1,0 +1,30 @@
+%\documentclass[12pt, a4paper]{article}
+\include{inc/fmt/preambule.tex}
+
+% ---------------------- Документ ----------------------
+\begin{document}
+	\includepdf[pages=1]{title.pdf}
+	\includepdf[pages=1]{tech_task.pdf}
+
+	\normalsize
+	\setcounter{page}{3}
+
+	\tableofcontents
+	\pagebreak
+
+	\include{inc/01-abstract}
+	\include{inc/10-analysis}
+	
+	\setcounter{figure}{0}
+	\include{inc/20-design}
+	
+	\setcounter{figure}{0}
+	\include{inc/30-technology}
+	%\include{inc/40-research}
+	\include{inc/50-conclusion}
+	\include{inc/60-bibliography}
+	\include{inc/70-application}
+	\include{inc/71-application}
+	\include{inc/72-application}
+	\include{inc/73-application}
+\end{document}
