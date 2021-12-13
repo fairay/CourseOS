@@ -1,3 +1,138 @@
 \section{Технологическая часть}
 
+\subsection{Выбор программных средств}
+В качестве языка программирования был выбран язык Си. Для сборки модуля использовалась утилита make и компилятор gcc.
+
+Была выбрана среда разработки Visual Studio Code, так как в ней накоплен опыт работы и она обладает широким набором возможностей.
+
+\subsection{Структура загружаемого модуля}
+
+Реализованный загружаемый модуль включает в себя следующие функции:
+\begin{itemize}
+	\item \textbf{int \_\_init rpigpio\_minit(void)} -- функция инициализации модуля;
+	\item \textbf{void \_\_exit rpigpio\_mcleanup(void)} -- функция выгрузки модуля;
+	
+	\item \textbf{int st\_open(struct inode*inode, struct file *filp)} -- функция открытия, описываемая в структуре file\_operations;
+	\item \textbf{int st\_release(struct inode *inode, struct file *filp)} -- функция закрытия, описываемая в структуре file\_operations;
+	\item \textbf{long st\_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)} -- функция ввода/вывода, описываемая в структуре file\_operations;
+	
+	\item \textbf{uint8\_t rpigpio\_read(int pin)} -- функция чтения значения контакта;
+	\item \textbf{long rpigpio\_write(int pin, uint8\_t val)} -- функция записи значения контакта;
+	\item \textbf{long rpigpio\_toggle(int pin, uint8\_t *flag)} -- функция переключения значения контакта;
+	
+	\item \textbf{long rpigpio\_request(int pin, int pid)} -- функция захвата управления над контактом;
+	\item \textbf{long rpigpio\_free(int pin)} -- функция освобождения управления над контактом;
+	
+	\item \textbf{long rpigpio\_mode(int pin, PIN\_MODE\_t mode)} -- функция установления режима работы;
+\end{itemize}
+
+В Приложении А представлены листинги каждой из частей проекта.
+
+\subsection{Сборка и запуск модуля}
+Сборка модуля осуществляется командой make с использованием компилятора gcc. На листинге 8 приведено содержимое файла сборки.
+\begin{lstlisting}[caption = {Makefile}, label=lst:make]
+obj-m += modgpio.o
+
+CODE_DIR = client
+.PHONY: client
+
+all:
+make -C /lib/modules/$(shell uname -r)/build M=$(PWD) modules
+
+clean: bclean
+
+bclean:
+rm -f .*.cmd *.o *.order *.mod.c *.ko
+
+kclean:
+make -C /lib/modules/$(shell uname -r)/build M=$(PWD) clean
+
+client:
+$(MAKE) -C $(CODE_DIR)
+
+cclean:
+$(MAKE) -C $(CODE_DIR) clean
+
+install: all
+sudo insmod modgpio.ko
+
+uninstall:
+-sudo rmmod modgpio
+
+reinstall: uninstall install
+\end{lstlisting}
+
+\subsection{Функции ввода/вывода}
+На листинге \ref{lst:iofunc} приведена реализация функции \textbf{st\_ioctl}, являющейся точкой входа для .
+
+
+\begin{lstlisting}[caption = {Функция ввода/вывода}, label=lst:iofunc]
+static long st_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
+{
+	int pin;
+	unsigned long ret, code;
+	uint8_t flag;
+	struct gpio_data_write wdata;	// write data
+	struct gpio_data_mode  mdata;	// mode data
+	
+	switch (cmd) {
+		case GPIO_READ:
+			get_user(pin, (int __user *) arg);
+			flag = rpigpio_read(pin);
+			put_user(flag, (uint8_t __user *)arg);
+			return 0;
+		
+		case GPIO_WRITE:
+			ret = copy_from_user(&wdata, (struct gpio_data_write __user *)arg, sizeof(struct gpio_data_write));
+			if (ret != 0) 
+			{
+				printk(KERN_DEBUG "[WRITE] Error copying data from userspace\n");
+				return -EFAULT;
+			}
+			return rpigpio_write(wdata.pin, wdata.data);
+			
+		case GPIO_REQUEST:
+			get_user (pin, (int __user *) arg);
+			return rpigpio_request(pin, current->pid);
+		
+		case GPIO_FREE:
+			get_user (pin, (int __user *) arg);
+			return code = rpigpio_free(pin);
+		
+		case GPIO_TOGGLE:
+			get_user (pin, (int __user *) arg);
+			
+			if (!(code = rpigpio_toggle(pin, &flag)))
+				put_user(flag?0:1, (uint8_t __user *)arg);
+			return code;
+		
+		case GPIO_MODE:
+			ret = copy_from_user(&mdata, (struct gpio_data_mode __user *)arg, sizeof(struct gpio_data_mode));
+			if (ret != 0) 
+			{
+				printk(KERN_DEBUG "[MODE] Error copying data from userspace\n");
+				return -EFAULT;
+			}
+		
+		return rpigpio_mode(mdata.pin, mdata.data);
+		
+		case GPIO_SET:
+			get_user (pin, (int __user *) arg);
+			printk(KERN_INFO "[SET] Pin: %d\n", pin);
+			return rpigpio_write(pin, 1);
+		case GPIO_CLR:
+			get_user (pin, (int __user *) arg);
+			printk(KERN_INFO "[CLR] Pin: %d\n", pin);
+			return rpigpio_write(pin, 0);
+		
+		default:
+			return -ENOTTY;
+	}
+}
+\end{lstlisting}
+
+\subsection*{Вывод}
+\addcontentsline{toc}{subsection}{Вывод}
+	Был выбраны технические средства реализации, описана общая структура программы. 
+
 \pagebreak
